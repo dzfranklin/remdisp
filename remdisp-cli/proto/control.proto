@@ -1,0 +1,30 @@
+syntax = "proto3";
+package control;
+
+service DisplayControl {
+  rpc Hello (HelloRequest) returns (HelloReply);
+  rpc Attach (AttachRequest) returns (stream AttachEvent);
+}
+
+message HelloRequest {
+  string version = 1;
+}
+
+message HelloReply {
+  string version = 1;
+}
+
+message AttachRequest {}
+
+message AttachEvent {
+  oneof event {
+    Attach attach = 1;
+  }
+
+  message Attach {
+    bytes edid = 1;
+    uint32 width_pixels = 2;
+    uint32 height_pixels = 3;
+    string video_addr = 4;
+  }
+}

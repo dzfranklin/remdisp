@@ -1,0 +1,49 @@
+[package]
+name = "remdisp-cli"
+version = "0.1.0"
+authors = ["Daniel Franklin <daniel@danielzfranklin.org>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["control", "display"]
+
+control = ["evdi"]
+display = []
+
+[dependencies]
+evdi = { version = "0.6.0", optional = true }
+anyhow = "1.0.38"
+cfg-if = "1.0.0"
+clap = "2.33.3"
+tonic = "0.4.0"
+prost = "0.7.0"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "time"] }
+ctrlc = "3.1.8"
+lazy_static = "1.4.0"
+parking_lot = "0.11.1"
+ffmpeg-sys-next = "4.3.5"
+rand = "0.8.3"
+tokio-stream = "0.1.4"
+futures = "0.3.13"
+async-trait = "0.1.48"
+tracing = "0.1.25"
+
+[build-dependencies]
+built = "0.4.4"
+tonic-build = "0.4.0"
+anyhow = "1.0.38"
+prost-build = "0.7.0"
+
+[patch.crates-io]
+evdi = { git = "https://github.com/danielzfranklin/evdi-rs.git" }
+drm-fourcc = { git = "https://github.com/danielzfranklin/drm-fourcc-rs.git" }
+test-env-log = { git = "https://github.com/danielzfranklin/test-env-log" }
+
+[dev-dependencies]
+tokio-test = "0.4.1"
+test-env-log = { version = "0.2.5", features = ["trace-pretty"] }
+tracing-flame = "0.1.0"
+tracing-subscriber = "0.2.17"
+env_logger = "0.8.3"
