@@ -6,6 +6,9 @@ pub(crate) use crate::VERSION;
 mod test_prelude {
     pub(crate) use test_env_log::test as ltest;
     pub(crate) use tokio::test as atest;
+    use std::time::Duration;
+
+    pub const TIMEOUT: Duration = Duration::from_secs(5);
 }
 
 #[cfg(test)]

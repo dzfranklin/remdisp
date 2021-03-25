@@ -5,6 +5,8 @@ use tonic::Status;
 
 use crate::control_plane::control::DisplayStreamer;
 
+mod encoder;
+
 #[derive(Debug)]
 pub struct DisplayStreamerImpl();
 
