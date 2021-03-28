@@ -13,13 +13,13 @@ control = ["evdi"]
 display = []
 
 [dependencies]
-evdi = { version = "0.6.0", optional = true }
+evdi = { version = "0.6.0", optional = true, features = ["serde"] }
 anyhow = "1.0.38"
 cfg-if = "1.0.0"
 clap = "2.33.3"
 tonic = "0.4.0"
 prost = "0.7.0"
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "time", "fs"] }
 ctrlc = "3.1.8"
 lazy_static = "1.4.0"
 parking_lot = "0.11.1"
@@ -29,6 +29,10 @@ tokio-stream = "0.1.4"
 futures = "0.3.13"
 async-trait = "0.1.48"
 tracing = "0.1.25"
+thiserror = "1.0.24"
+rav1e = "0.4.0"
+derivative = "2.2.0"
+libc = "0.2.91"
 
 [build-dependencies]
 built = "0.4.4"
@@ -47,3 +51,4 @@ test-env-log = { version = "0.2.5", features = ["trace-pretty"] }
 tracing-flame = "0.1.0"
 tracing-subscriber = "0.2.17"
 env_logger = "0.8.3"
+serde_json = "1.0.64"

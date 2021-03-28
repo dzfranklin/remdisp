@@ -1,6 +1,9 @@
 #[allow(unused_imports)]
-pub(crate) use tracing::{debug, info, warn, error, span, instrument};
+pub(crate) use tracing::{trace, debug, info, warn, error, span, instrument};
 pub(crate) use crate::VERSION;
+pub(crate) use derivative::Derivative;
+pub(crate) use crate::ensure_av_logs_setup;
+pub(crate) use thiserror::Error;
 
 #[cfg(test)]
 mod test_prelude {

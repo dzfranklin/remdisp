@@ -1,161 +1,188 @@
-use anyhow::{Context, Result, anyhow}; // TODO: Replace with proper errors
-use evdi::prelude::*;
-use ffmpeg_sys_next::*;
-use std::ffi::CString;
-use std::ptr;
+use std::{io, mem, ptr};
+use std::ffi::{CString, CStr, c_void};
+use std::io::Write;
+use std::os::raw::{c_int, c_char};
+
+use anyhow::Context;
+use evdi::prelude::{Buffer, Mode};
+use ffmpeg_sys_next as av;
+use ffmpeg_sys_next::EAGAIN;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::io::AsyncWriteExt;
-use std::os::raw::c_int;
 
-// TODO: Use multiple buffers
+use converter::{Converter, ConverterError};
 
+use crate::prelude::*;
+use std::collections::HashMap;
+
+mod converter;
+mod codec_options;
+
+#[derive(Debug)]
 pub struct Encoder {
-    ctx: *mut AVCodecContext,
-    frame: *mut AVFrame,
-    pkt: *mut AVPacket,
+    ctx: ptr::NonNull<av::AVCodecContext>,
+    pkt: ptr::NonNull<av::AVPacket>,
     mode: Mode,
+    converter: Converter,
 }
 
 impl Encoder {
-    pub fn new(mode: Mode) -> Result<Self> {
-        // NOTE: Based on <https://github.com/FFmpeg/FFmpeg/blob/master/doc/examples/encode_video.c>
+    // See <https://ffmpeg.org/doxygen/4.0/group__lavc__encdec.html>
+    // and <https://github.com/FFmpeg/FFmpeg/blob/master/doc/examples/encode_video.c>
 
-        // Use NonNull
+    #[instrument]
+    pub fn new(mode: Mode) -> Result<Self, EncoderError> {
+        ensure_av_logs_setup();
 
-        let codec_id = AVCodecID::AV_CODEC_ID_HEVC;
+        let codec_id = av::AVCodecID::AV_CODEC_ID_HEVC;
+
         let codec = unsafe {
-            let codec = avcodec_find_encoder(codec_id);
-            if codec.is_null() {
-                None
-            } else {
-                Some(codec)
-            }
-        }.with_context(|| format!("Required codec {:?} not available, check your ffmpeg installation", codec_id))?;
+            let codec = av::avcodec_find_encoder(codec_id);
+            ptr::NonNull::new(codec).ok_or(EncoderError::CodecUnavailable(codec_id))
+        }?;
+        debug!(?codec_id, "Found codec");
 
-        let ctx = unsafe {
-            let ctx = avcodec_alloc_context3(codec);
-            if ctx.is_null() {
-                None
-            } else {
-                Some(ctx)
-            }
-        }.context("Failed to allocate context")?;
+        let mut ctx = unsafe {
+            let ctx = av::avcodec_alloc_context3(codec.as_ptr());
+            ptr::NonNull::new(ctx).ok_or(EncoderError::CreateContext)
+        }?;
+        debug!("Found codec context");
 
-        let pixel_format = {
-            pixel_format_from_fourcc(&mode.pixel_format?)
-                .context("Unsupported pixel format")?
-        };
+        let supported_formats = Self::supported_formats(codec);
+        let target_src_format = *supported_formats.get(0)
+            .ok_or(EncoderError::CodecSupportsNoFormats(codec_id))?;
+        debug!(?target_src_format, ?codec, ?supported_formats, "Target src format");
 
         unsafe {
-            (*ctx).width = mode.width as i32;
-            (*ctx).height = mode.height as i32;
-            (*ctx).time_base = AVRational { num: 1, den: 25 };
-            (*ctx).framerate = AVRational { num: 25, den: 1 };
+            let ctx = ctx.as_mut();
+            ctx.width = mode.width as i32;
+            ctx.height = mode.height as i32;
+            ctx.pix_fmt = target_src_format;
+            ctx.time_base = av::AVRational { num: 1, den: 25 };
+            ctx.framerate = av::AVRational { num: 25, den: 1 };
+
+            let options = codec_options::Options::from(ctx.priv_data);
+            debug!(?options, "Options supported by codec");
+
+            // Disable most logs because there is no way to prevent them from going to stdout
+            Self::set_opt(ctx, b"x265-params\0", b"log-level=warning\0")?;
+
+            // Tuning
+            // On the quality - speed - size tradeoff we pick high quality high size
+
             // Number of frames between I-frames. We set to very high because we never need to seek
-            (*ctx).gop_size = 100;
-            (*ctx).max_b_frames = 1;
-            (*ctx).pix_fmt = pixel_format;
-
-            // For more options see <https://ffmpeg.org/doxygen/trunk/group__lavc__core.html#ga11f785a188d7d9df71621001465b0f1d>
-            if av_opt_set(
-                (*ctx).priv_data,
-                CString::new("preset")?.as_ptr(),
-                CString::new("high")?.as_ptr(),
-                0,
-            ) != 0 {
-                return Err(anyhow!("Failed to set opt"));
-            }
+            ctx.gop_size = 100;
+            ctx.max_b_frames = 1;
+            Self::set_opt(ctx, b"preset\0", b"ultrafast\0")?;
+            // Constant rate factor, i.e. quality (0..51.0, lower better quality)
+            Self::set_opt(ctx, b"crf\0", b"0\0")?;
         }
+        debug!("Configured codec context");
+
+        let converter = Converter::new(mode, target_src_format)?;
 
         unsafe {
-            if avcodec_open2(ctx, codec, ptr::null_mut()) < 0 {
-                return Err(anyhow!("Failed to open codec"));
+            let status = av::avcodec_open2(ctx.as_ptr(), codec.as_ptr(), ptr::null_mut());
+            if status < 0 {
+                return Err(EncoderError::OpenContext(status));
             }
         }
-
-        // TODO: Wrap evdi buf instead
-        // See <https://stackoverflow.com/a/51423289>
-        let frame = unsafe {
-            let frame = av_frame_alloc();
-            if frame.is_null() {
-                None
-            } else {
-                Some(frame)
-            }
-        }.context("Failed to allocate frame")?;
-
-        unsafe {
-            (*frame).format = pixel_format as i32;
-            (*frame).width = (*ctx).width;
-            (*frame).height = (*ctx).height;
-        }
-
-        unsafe {
-            if av_frame_get_buffer(frame, 0) < 0 {
-                return Err(anyhow!("Could not allocate video frame data"));
-            }
-        }
+        debug!("Opened codec context");
 
         let pkt = unsafe {
-            let pkt = av_packet_alloc();
-            if pkt.is_null() {
-                None
-            } else {
-                Some(pkt)
-            }
-        }.context("Failed to allocate packet")?;
+            let pkt = av::av_packet_alloc();
+            ptr::NonNull::new(pkt).ok_or(EncoderError::AllocatePacket)
+        }?;
 
         Ok(Self {
             ctx,
-            frame,
             pkt,
             mode,
+            converter,
         })
     }
 
-    pub async fn encode_frame_to(&mut self, buf: &Buffer, out: &mut TcpStream) -> Result<()> {
+    /// For possible options see the CLI docs of the encoder.
+    /// For hevc: https://x265.readthedocs.io/en/latest/cli.html
+    fn set_opt(ctx: &mut av::AVCodecContext, name: &[u8], value: &[u8]) -> Result<(), EncoderError> {
         unsafe {
-            let depth = self.mode.bits_per_pixel as usize;
-            let mut planes: Vec<&mut [u8]> = Vec::with_capacity(depth);
-            let mut plane_strides: Vec<usize> = Vec::with_capacity(depth);
-            for i in 0..depth {
-                planes.push(&mut *ptr::slice_from_raw_parts_mut(
-                    (*self.frame).data[i],
-                    (*self.frame).linesize[i] as usize * buf.height,
-                ));
-
-                plane_strides.push((*self.frame).linesize[i] as usize);
+            let status = av::av_opt_set(
+                ctx.priv_data,
+                name.as_ptr().cast(),
+                value.as_ptr().cast(),
+                0,
+            );
+            if status == 0 {
+                Ok(())
+            } else {
+                Err(EncoderError::ConfigureContext)
             }
+        }
+    }
 
-            // TODO: Set up buffers so we don't need to do all this converting
-            for (y, row_with_junk) in buf.bytes().chunks_exact(buf.stride).enumerate() {
-                let row = &row_with_junk[0..buf.width];
-                for (x, pixel) in row.chunks_exact(depth).enumerate() {
-                    for plane_i in 0..depth {
-                        planes[plane_i][y * plane_strides[plane_i] + x] = pixel[plane_i];
-                    }
-                }
+    fn supported_formats(codec: ptr::NonNull<av::AVCodec>) -> Vec<av::AVPixelFormat> {
+        let mut formats = vec![];
+        unsafe {
+            let mut head = codec.as_ref().pix_fmts;
+            while !head.is_null() && *head != av::AVPixelFormat::AV_PIX_FMT_NONE {
+                formats.push(*head);
+                head = head.add(mem::size_of::<*const av::AVPixelFormat>())
             }
+        }
+        formats
+    }
 
+    #[instrument(skip(bytes))]
+    pub fn send_frame(&mut self, bytes: &[u8]) -> Result<(), EncoderError> {
+        let frame = self.converter.convert(bytes);
+        unsafe {
             // Presentation time stamp
-            (*self.frame).pts += 1;
+            frame.pts += 1;
 
-            if avcodec_send_frame(self.ctx, self.frame) < 0 {
-                return Err(anyhow!("Error sending frame for encoding"));
+            let status = av::avcodec_send_frame(self.ctx.as_ptr(), frame);
+            if status < 0 {
+                return Err(EncoderError::SendForEncoding(status));
             }
+        }
+        Ok(())
+    }
 
-            loop {
-                let ret = avcodec_receive_packet(self.ctx, self.pkt);
-                if ret == av_error(EAGAIN) || ret == AVERROR_EOF {
+    #[instrument]
+    pub fn flush(&mut self) -> Result<(), EncoderError> {
+        unsafe {
+            // TODO: docs: it is recommended that AVPackets and AVFrames are refcounted, or libavcodec might have to copy the input dat
+            // NOTE: docs: In theory, sending input can result in EAGAIN - this should happen only
+            // if not all output was received. You can use this to structure alternative decode or
+            // encode loops other than the one suggested above. For example, you could try sending
+            // new input on each iteration, and try to receive output if that returns EAGAIN.
+            // See <https://ffmpeg.org/doxygen/4.0/group__lavc__encdec.html>
+            let status = av::avcodec_send_frame(self.ctx.as_ptr(), ptr::null());
+            if status < 0 {
+                Err(EncoderError::Flush(status))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[instrument(skip(out))]
+    pub async fn receive_available<W: AsyncWrite + Unpin>(&mut self, mut out: W) -> Result<(), EncoderError> {
+        loop {
+            unsafe {
+                let status = av::avcodec_receive_packet(self.ctx.as_ptr(), self.pkt.as_ptr());
+                if status == av_error(EAGAIN) || status == av::AVERROR_EOF {
                     return Ok(());
-                } else if ret < 0 {
-                    return Err(anyhow!("Error during encoding"));
+                } else if status < 0 {
+                    return Err(EncoderError::Encode);
                 }
+            };
 
-                let data = &*ptr::slice_from_raw_parts((*self.pkt).data, (*self.pkt).size as usize);
-                out.write_all(data).await?;
-                av_packet_unref(self.pkt);
-            }
+            let data = unsafe {
+                let pkt = self.pkt.as_ref();
+                &*ptr::slice_from_raw_parts(pkt.data, pkt.size as usize)
+            };
+
+            out.write_all(data).await?;
         }
     }
 }
@@ -163,18 +190,9 @@ impl Encoder {
 impl Drop for Encoder {
     fn drop(&mut self) {
         unsafe {
-            avcodec_free_context(&mut self.ctx as _);
-            av_frame_free(&mut self.frame as _);
-            av_packet_free(&mut self.pkt as _);
+            av::avcodec_free_context(&mut self.ctx.as_ptr());
+            av::av_packet_free(&mut self.pkt.as_ptr());
         }
-    }
-}
-
-fn pixel_format_from_fourcc(format: &DrmFormat) -> Option<AVPixelFormat> {
-    // TODO: Support more
-    match format {
-        DrmFormat::Xbgr8888 => Some(AV_PIX_FMT_0BGR32),
-        _ => None
     }
 }
 
@@ -183,40 +201,81 @@ fn av_error(i: c_int) -> c_int {
     -i
 }
 
+#[derive(Debug, Error)]
+pub enum EncoderError {
+    #[error("Required codec {0:?} not available, check your ffmpeg installation")]
+    CodecUnavailable(av::AVCodecID),
+    #[error("Codec {0:?} supports no pixel formats")]
+    CodecSupportsNoFormats(av::AVCodecID),
+    #[error("Failed to allocate and create encoding context")]
+    CreateContext,
+    #[error("Failed to configure context")]
+    ConfigureContext,
+    #[error("Failed to open context: AV_ERROR {0}")]
+    OpenContext(i32),
+    #[error("Failed to allocate packet")]
+    AllocatePacket,
+    #[error("Failed to convert to the source format of the encoder")]
+    FormatConversion(#[from] ConverterError),
+    #[error("Failed to send frame for encoding: AV_ERROR {0}")]
+    SendForEncoding(i32),
+    #[error("Failed to encode or receive packet")]
+    Encode,
+    #[error("Failed to flush encoder: AV_ERROR {0}")]
+    Flush(i32),
+    #[error("Failed to write data")]
+    Write(#[from] io::Error),
+}
+
 #[cfg(test)]
 pub mod tests {
-    use crate::prelude::*;
     use evdi::prelude::*;
-    use std::fs::File;
-    use std::{fs, io};
-    use std::path::Path;
-    use std::io::{Write, Error};
+
+    use crate::data_plane::tests::{framebuf_fixture, mode_fixture};
+    use crate::prelude::*;
+
+    use super::*;
+
+    fn encoder_fixture() -> Encoder {
+        let mode = mode_fixture();
+        Encoder::new(mode).unwrap()
+    }
+
+    #[ltest]
+    fn can_create() {
+        let _encoder = encoder_fixture();
+    }
+
+    #[ltest(atest)]
+    async fn encode_frames() {
+        let mut encoder = encoder_fixture();
+        let mut out = vec![];
+
+        for n in 0..9 {
+            debug!("Encoding framebuf {}", n);
+            let bytes = framebuf_fixture(n);
+            encoder.send_frame(&bytes).unwrap();
+            encoder.receive_available(&mut out).await.unwrap()
+        }
+
+        encoder.flush().unwrap();
+        encoder.receive_available(&mut out).await.unwrap()
+    }
 
     #[ignore]
     #[ltest(atest)]
-    async fn generate_sample_data() {
-        let config = DeviceConfig::sample();
-        let mut handle = DeviceNode::get().unwrap().open().unwrap().connect(&config);
-        let mode = handle.events.await_mode(TIMEOUT).await.unwrap();
-        let buf_id = handle.new_buffer(&mode);
+    async fn output_video_to_file_for_manual_check() {
+        let mut encoder = encoder_fixture();
+        let mut out = tokio::fs::File::create("TEMP_video.hevc").await.unwrap();
 
-        for _ in 0..200 {
-           handle.request_update(buf_id, TIMEOUT).await.unwrap();
+        for n in 0..9 {
+            debug!("Encoding framebuf {}", n);
+            let bytes = framebuf_fixture(n);
+            encoder.send_frame(&bytes).unwrap();
+            encoder.receive_available(&mut out).await.unwrap()
         }
 
-        let dir_name = format!("sample_data/framebufs_{}x{}", config.width_pixels, config.height_pixels);
-        let dir = Path::new(&dir_name);
-
-        if let Err(err) = fs::create_dir(dir) {
-            if err.kind() != io::ErrorKind::AlreadyExists {
-                Err(err).unwrap()
-            }
-        }
-
-        for n in 0..10 {
-            handle.request_update(buf_id, TIMEOUT).await.unwrap();
-            let mut f = File::create(dir.join(format!("{}.framebuf", n))).unwrap();
-            f.write_all(handle.get_buffer(buf_id).unwrap().bytes()).unwrap();
-        }
+        encoder.flush().unwrap();
+        encoder.receive_available(&mut out).await.unwrap()
     }
 }
