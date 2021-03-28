@@ -1,19 +1,15 @@
 use std::{io, mem, ptr};
-use std::ffi::{CString, CStr, c_void};
 use std::io::Write;
-use std::os::raw::{c_int, c_char};
+use std::os::raw::c_int;
 
-use anyhow::Context;
-use evdi::prelude::{Buffer, Mode};
+use evdi::prelude::Mode;
 use ffmpeg_sys_next as av;
 use ffmpeg_sys_next::EAGAIN;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 use converter::{Converter, ConverterError};
 
 use crate::prelude::*;
-use std::collections::HashMap;
 
 mod converter;
 mod codec_options;

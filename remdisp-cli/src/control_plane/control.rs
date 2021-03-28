@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use tokio::net::TcpListener;
+use tokio::net::{TcpStream};
 use tokio::time::timeout;
 use tonic::{Status, Streaming};
 use tonic::transport::{Channel, Endpoint, Uri};
@@ -17,9 +17,10 @@ use super::gen;
 const CONTROL_MSG_TIMEOUT: Duration = Duration::from_secs(15);
 const CONTROL_CONNECT_TIMEOUT: Duration = CONTROL_MSG_TIMEOUT;
 
-#[async_trait]
-pub trait DisplayStreamer: Send + Sync + Debug {
-    async fn stream(&self, listener: TcpListener) -> Result<(), Status>;
+#[async_trait(?Send)]
+pub trait DisplayStreamer: Debug {
+    /// Cancelled by caller
+    async fn stream(&self, stream: TcpStream) -> Result<!, Status>;
 }
 
 pub struct ControlClient {

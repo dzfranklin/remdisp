@@ -16,8 +16,6 @@ pub mod tests {
 
     use crate::prelude::*;
 
-    use super::*;
-
     lazy_static! {
         static ref FRAMEBUFS_DIR: &'static Path = &Path::new("sample_data/evdi_framebufs");
     }

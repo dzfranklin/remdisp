@@ -1,7 +1,7 @@
 #![feature(async_closure)]
 #![feature(type_alias_impl_trait)]
 #![feature(array_methods)]
-#![feature(c_variadic)]
+#![feature(never_type)]
 
 use std::sync::Once;
 use std::ffi::{c_void, CStr};

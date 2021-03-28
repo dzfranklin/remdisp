@@ -1,7 +1,5 @@
-use std::{mem, ptr};
+use std::{ptr};
 use std::ops::BitAnd;
-use std::os::raw::c_int;
-use std::ptr::NonNull;
 
 use evdi::prelude::{DrmFormat, Mode, UnrecognizedFourcc};
 use ffmpeg_sys_next as av;
@@ -14,11 +12,11 @@ const ALIGNMENT: i32 = 32;
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Converter {
-    ctx: NonNull<av::SwsContext>,
+    ctx: ptr::NonNull<av::SwsContext>,
     #[derivative(Debug = "ignore")]
-    src_frame: NonNull<av::AVFrame>,
+    src_frame: ptr::NonNull<av::AVFrame>,
     #[derivative(Debug = "ignore")]
-    dst_frame: NonNull<av::AVFrame>,
+    dst_frame: ptr::NonNull<av::AVFrame>,
     src_format: av::AVPixelFormat,
     dst_format: av::AVPixelFormat,
     #[derivative(Debug = "ignore")]
@@ -70,17 +68,17 @@ impl Converter {
                 ptr::null_mut(),
                 ptr::null_mut(),
             );
-            NonNull::new(ptr).ok_or(ConverterError::CreateContext)?
+            ptr::NonNull::new(ptr).ok_or(ConverterError::CreateContext)?
         };
 
         let mut src_frame = unsafe {
             let ptr = av::av_frame_alloc();
-            NonNull::new(ptr).ok_or(ConverterError::AllocFrame)?
+            ptr::NonNull::new(ptr).ok_or(ConverterError::AllocFrame)?
         };
 
         let mut dst_frame = unsafe {
             let ptr = av::av_frame_alloc();
-            NonNull::new(ptr).ok_or(ConverterError::AllocFrame)?
+            ptr::NonNull::new(ptr).ok_or(ConverterError::AllocFrame)?
         };
 
         let mut dst_buf = unsafe {
