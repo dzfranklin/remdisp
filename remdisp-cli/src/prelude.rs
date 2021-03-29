@@ -4,6 +4,7 @@ pub(crate) use crate::VERSION;
 pub(crate) use derivative::Derivative;
 pub(crate) use crate::ensure_av_logs_setup;
 pub(crate) use thiserror::Error;
+pub(crate) use crate::send_or_log::SendOrLog;
 
 #[cfg(test)]
 mod test_prelude {

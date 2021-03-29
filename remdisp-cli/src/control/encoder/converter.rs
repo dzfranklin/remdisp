@@ -192,10 +192,10 @@ pub mod tests {
     use evdi::prelude::Mode;
     use ffmpeg_sys_next as ffi;
 
-    use crate::data_plane::tests::{framebuf_fixture, mode_fixture};
     use crate::prelude::*;
 
     use super::*;
+    use crate::control::encoder::tests::{mode_fixture, framebuf_fixture};
 
     #[ltest]
     fn can_create() {

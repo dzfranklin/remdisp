@@ -225,9 +225,14 @@ pub enum EncoderError {
 
 #[cfg(test)]
 pub mod tests {
-    use evdi::prelude::*;
+    use std::{fs, io};
+    use std::fs::File;
+    use std::io::{Read, Write};
+    use std::path::Path;
 
-    use crate::data_plane::tests::{framebuf_fixture, mode_fixture};
+    use evdi::prelude::*;
+    use lazy_static::lazy_static;
+
     use crate::prelude::*;
 
     use super::*;
@@ -237,15 +242,31 @@ pub mod tests {
         Encoder::new(mode).unwrap()
     }
 
+    lazy_static! {
+        static ref FRAMEBUFS_DIR: &'static Path = &Path::new("sample_data/evdi_framebufs");
+    }
+
+    pub(crate) fn mode_fixture() -> Mode {
+        let mode_f = File::open(FRAMEBUFS_DIR.join("mode.json"))
+            .expect("Do you need to run generate_sample_data?");
+        serde_json::from_reader(mode_f).unwrap()
+    }
+
+    pub(crate) fn framebuf_fixture(n: u32) -> Vec<u8> {
+        let mut buf = vec![];
+        File::open(format!("sample_data/evdi_framebufs/{}.framebuf", n))
+            .expect("Nonexistent framebuf data")
+            .read_to_end(&mut buf).unwrap();
+        buf
+    }
+
     #[ltest]
     fn can_create() {
         let _encoder = encoder_fixture();
     }
 
-    #[ltest(atest)]
-    async fn encode_frames() {
+    async fn encode_to<W: AsyncWrite + Unpin>(mut out: W) {
         let mut encoder = encoder_fixture();
-        let mut out = vec![];
 
         for n in 0..9 {
             debug!("Encoding framebuf {}", n);
@@ -258,20 +279,51 @@ pub mod tests {
         encoder.receive_available(&mut out).await.unwrap()
     }
 
+    #[ltest(atest)]
+    async fn encode_frames() {
+        let mut out = vec![];
+        encode_to(&mut out).await;
+    }
+
     #[ignore]
     #[ltest(atest)]
     async fn output_video_to_file_for_manual_check() {
-        let mut encoder = encoder_fixture();
         let mut out = tokio::fs::File::create("TEMP_video.hevc").await.unwrap();
+        encode_to(&mut out).await;
+    }
 
-        for n in 0..9 {
-            debug!("Encoding framebuf {}", n);
-            let bytes = framebuf_fixture(n);
-            encoder.send_frame(&bytes).unwrap();
-            encoder.receive_available(&mut out).await.unwrap()
+    #[ignore]
+    #[ltest(atest)]
+    async fn generate_sample_hevc() {
+        let mut out = tokio::fs::File::create("sample_data/sample.hevc").await.unwrap();
+        encode_to(&mut out).await;
+    }
+
+    #[ignore]
+    #[ltest(atest)]
+    async fn generate_sample_framebufs() {
+        let config = DeviceConfig::sample();
+        let mut handle = DeviceNode::get().unwrap().open().unwrap().connect(&config);
+        let mode = handle.events.await_mode(TIMEOUT).await.unwrap();
+        let buf_id = handle.new_buffer(&mode);
+
+        if let Err(err) = fs::create_dir(*FRAMEBUFS_DIR) {
+            if err.kind() != io::ErrorKind::AlreadyExists {
+                Err(err).unwrap()
+            }
         }
 
-        encoder.flush().unwrap();
-        encoder.receive_available(&mut out).await.unwrap()
+        let mode_data = serde_json::to_vec(&mode).unwrap();
+        File::create(FRAMEBUFS_DIR.join("mode.json")).unwrap().write_all(&mode_data).unwrap();
+
+        for _ in 0..200 {
+            handle.request_update(buf_id, TIMEOUT).await.unwrap();
+        }
+
+        for n in 0..10 {
+            handle.request_update(buf_id, TIMEOUT).await.unwrap();
+            let mut f = File::create(FRAMEBUFS_DIR.join(format!("{}.framebuf", n))).unwrap();
+            f.write_all(handle.get_buffer(buf_id).unwrap().bytes()).unwrap();
+        }
     }
 }
