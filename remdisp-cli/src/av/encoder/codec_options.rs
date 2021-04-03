@@ -3,6 +3,7 @@ use std::{ptr, fmt};
 use ffmpeg_sys_next as av;
 use std::os::raw::c_char;
 use std::fmt::{Debug, Formatter};
+use crate::av::ensure_av_logs_setup;
 
 pub struct Options {
     children: Vec<Option>
@@ -20,6 +21,8 @@ pub enum Option {
 
 impl Options {
     pub unsafe fn from(obj: *const c_void) -> Options {
+        ensure_av_logs_setup();
+
         let mut out = Options::default();
 
         // See <https://ffmpeg.org/doxygen/3.4/group__lavu__dict.html#gae67f143237b2cb2936c9b147aa6dfde3>

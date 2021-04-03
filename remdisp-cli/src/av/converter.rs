@@ -6,6 +6,7 @@ use ffmpeg_sys_next as av;
 use thiserror::Error;
 
 use crate::prelude::*;
+use crate::av::{AvError, ensure_av_logs_setup};
 
 const ALIGNMENT: i32 = 32;
 
@@ -29,8 +30,8 @@ pub struct Converter {
 /// Convert raw buffers into a single-plane format
 impl Converter {
     /// Only src formats with a single plane are supported
-    #[instrument(skip(src))]
-    pub fn new(src: Mode, dst: av::AVPixelFormat) -> Result<Self, ConverterError> {
+    #[instrument(err, skip(src))]
+    pub fn new(src: Mode, dst: av::AVPixelFormat) -> Result<Self, AvError> {
         ensure_av_logs_setup();
 
         let width = src.width as i32;
@@ -42,15 +43,15 @@ impl Converter {
 
         unsafe {
             if av::sws_isSupportedInput(src) == 0 {
-                return Err(ConverterError::UnsupportedSrcFormat(src));
+                return Err(ConverterError::UnsupportedSrcFormat(src).into());
             }
 
             if (*av::av_pix_fmt_desc_get(src)).flags.bitand(av::AV_PIX_FMT_FLAG_PLANAR as u64) != 0 {
-                return Err(ConverterError::PlanarSrc(src));
+                return Err(ConverterError::PlanarSrc(src).into());
             }
 
             if av::sws_isSupportedOutput(dst) == 0 {
-                return Err(ConverterError::UnsupportedDstFormat(dst));
+                return Err(ConverterError::UnsupportedDstFormat(dst).into());
             }
         }
 
@@ -73,12 +74,12 @@ impl Converter {
 
         let mut src_frame = unsafe {
             let ptr = av::av_frame_alloc();
-            ptr::NonNull::new(ptr).ok_or(ConverterError::AllocFrame)?
+            ptr::NonNull::new(ptr).ok_or(AvError::AllocateFrame)?
         };
 
         let mut dst_frame = unsafe {
             let ptr = av::av_frame_alloc();
-            ptr::NonNull::new(ptr).ok_or(ConverterError::AllocFrame)?
+            ptr::NonNull::new(ptr).ok_or(AvError::AllocateFrame)?
         };
 
         let mut dst_buf = unsafe {
@@ -178,8 +179,6 @@ pub enum ConverterError {
     UnsupportedDstFormat(av::AVPixelFormat),
     #[error("Failed create SwsContext")]
     CreateContext,
-    #[error("Failed to allocate frame")]
-    AllocFrame,
 }
 
 #[cfg(test)]
@@ -195,7 +194,7 @@ pub mod tests {
     use crate::prelude::*;
 
     use super::*;
-    use crate::control::encoder::tests::{mode_fixture, framebuf_fixture};
+    use crate::av::encoder::tests::{mode_fixture, framebuf_fixture};
 
     #[ltest]
     fn can_create() {

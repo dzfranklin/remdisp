@@ -34,6 +34,8 @@ rav1e = "0.4.0"
 derivative = "2.2.0"
 libc = "0.2.91"
 sdl2 = "0.34.3"
+bytes = "1.0.1"
+printf = "0.1.0"
 
 [build-dependencies]
 built = "0.4.4"
