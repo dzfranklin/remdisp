@@ -1,12 +1,11 @@
-use std::{mem, ptr};
-use std::os::raw::c_int;
+use std::ptr;
 
 use evdi::prelude::Mode;
 use ffmpeg_sys_next as sys;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use crate::av::{AvError, converter::{Converter, ConverterError}, ensure_av_logs_setup};
 use crate::av;
+use crate::av::{converter::Converter, ensure_av_logs_setup, AvError};
 use crate::prelude::*;
 
 mod codec_options;
@@ -33,19 +32,31 @@ impl Encoder {
         let codec_id = sys::AVCodecID::AV_CODEC_ID_H264;
 
         let codec = unsafe {
-            nonnull_or!(sys::avcodec_find_encoder(codec_id), AvError::CodecUnavailable(codec_id))
+            nonnull_or!(
+                sys::avcodec_find_encoder(codec_id),
+                AvError::CodecUnavailable(codec_id)
+            )
         }?;
         debug!(?codec_id, "Found codec");
 
         let mut ctx = unsafe {
-            nonnull_or!(sys::avcodec_alloc_context3(codec.as_ptr()), AvError::CreateContext)
+            nonnull_or!(
+                sys::avcodec_alloc_context3(codec.as_ptr()),
+                AvError::CreateContext
+            )
         }?;
         debug!("Found codec context");
 
         let supported_formats = Self::supported_formats(codec);
-        let target_src_format = *supported_formats.get(0)
+        let target_src_format = *supported_formats
+            .get(0)
             .ok_or(AvError::CodecSupportsNoFormats(codec_id))?;
-        debug!(?target_src_format, ?codec, ?supported_formats, "Target src format");
+        debug!(
+            ?target_src_format,
+            ?codec,
+            ?supported_formats,
+            "Target src format"
+        );
 
         unsafe {
             let ctx = ctx.as_mut();
@@ -79,9 +90,7 @@ impl Encoder {
         }
         debug!("Opened codec context");
 
-        let pkt = unsafe {
-            nonnull_or!(sys::av_packet_alloc(), AvError::AllocatePacket)
-        }?;
+        let pkt = unsafe { nonnull_or!(sys::av_packet_alloc(), AvError::AllocatePacket) }?;
 
         Ok(Self {
             ctx,
@@ -157,7 +166,10 @@ impl Encoder {
     }
 
     #[instrument(err, skip(out))]
-    pub async fn receive_available<W: AsyncWrite + Unpin>(&mut self, mut out: W) -> Result<(), AvError> {
+    pub async fn receive_available<W: AsyncWrite + Unpin>(
+        &mut self,
+        mut out: W,
+    ) -> Result<(), AvError> {
         loop {
             unsafe {
                 // NOTE: I'm not sure if this receives packets in order. If not, we have a problem,
@@ -178,19 +190,18 @@ impl Encoder {
             let pkt_ref = unsafe { self.pkt.as_ref() };
 
             debug!(
-                pts=pkt_ref.pts,
-                dts=pkt_ref.dts,
-                size=pkt_ref.size,
-                stream_index=pkt_ref.stream_index,
-                flags=pkt_ref.flags,
-                duration=pkt_ref.duration,
-                pos=pkt_ref.pos,
-                convergence_duration=pkt_ref.convergence_duration,
-                "Received packet");
+                pts = pkt_ref.pts,
+                dts = pkt_ref.dts,
+                size = pkt_ref.size,
+                stream_index = pkt_ref.stream_index,
+                flags = pkt_ref.flags,
+                duration = pkt_ref.duration,
+                pos = pkt_ref.pos,
+                convergence_duration = pkt_ref.convergence_duration,
+                "Received packet"
+            );
 
-            let data = unsafe {
-                &*ptr::slice_from_raw_parts(pkt_ref.data, pkt_ref.size as usize)
-            };
+            let data = unsafe { &*ptr::slice_from_raw_parts(pkt_ref.data, pkt_ref.size as usize) };
 
             out.write_all(data).await?;
         }
@@ -208,15 +219,13 @@ impl Drop for Encoder {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{fs, io};
     use std::fs::File;
     use std::io::{Read, Write};
     use std::path::Path;
+    use std::{fs, io};
 
     use evdi::prelude::*;
     use lazy_static::lazy_static;
-
-    use crate::prelude::*;
 
     use super::*;
 
@@ -239,7 +248,8 @@ pub mod tests {
         let mut buf = vec![];
         File::open(format!("sample_data/evdi_framebufs/{}.framebuf", n))
             .expect("Nonexistent framebuf data")
-            .read_to_end(&mut buf).unwrap();
+            .read_to_end(&mut buf)
+            .unwrap();
         buf
     }
 
@@ -279,7 +289,9 @@ pub mod tests {
     #[ignore]
     #[ltest(atest)]
     async fn generate_sample_h264() {
-        let mut out = tokio::fs::File::create("sample_data/sample.h264").await.unwrap();
+        let mut out = tokio::fs::File::create("sample_data/sample.h264")
+            .await
+            .unwrap();
         encode_to(&mut out).await;
     }
 
@@ -297,8 +309,8 @@ pub mod tests {
             }
         }
 
-        let mode_data = serde_json::to_vec(&mode).unwrap();
-        File::create(FRAMEBUFS_DIR.join("mode.json")).unwrap().write_all(&mode_data).unwrap();
+        let mut f = File::create(FRAMEBUFS_DIR.join("mode.json")).unwrap();
+        let mode_data = serde_json::to_writer(&mut f, &mode).unwrap();
 
         for _ in 0..200 {
             handle.request_update(buf_id, TIMEOUT).await.unwrap();
@@ -307,7 +319,8 @@ pub mod tests {
         for n in 0..10 {
             handle.request_update(buf_id, TIMEOUT).await.unwrap();
             let mut f = File::create(FRAMEBUFS_DIR.join(format!("{}.framebuf", n))).unwrap();
-            f.write_all(handle.get_buffer(buf_id).unwrap().bytes()).unwrap();
+            f.write_all(handle.get_buffer(buf_id).unwrap().bytes())
+                .unwrap();
         }
     }
 }

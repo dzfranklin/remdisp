@@ -1,7 +1,7 @@
-use tracing::{trace, debug, info, warn, error, span, instrument};
-use tokio::sync::mpsc;
 use std::fmt::Debug;
-use std::future::Future;
+use tokio::sync::mpsc;
+use tracing::{debug, error, info, instrument, span, trace, warn};
+
 use async_trait::async_trait;
 
 #[async_trait]
@@ -17,7 +17,7 @@ impl<T: Debug + Send + Sync> SendOrLog<T> for mpsc::Sender<T> {
         match self.send(msg).await {
             Ok(()) => {
                 info!(msg = ?msg_dbg, "Sent");
-            },
+            }
             Err(_) => {
                 warn!(chan = ?self, msg = ?msg_dbg, "Failed to send to")
             }

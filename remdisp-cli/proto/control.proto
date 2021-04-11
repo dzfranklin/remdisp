@@ -3,12 +3,13 @@ package control;
 
 service DisplayControl {
   rpc Hello (HelloRequest) returns (HelloReply);
-  rpc Attach (AttachRequest) returns (AttachReply);
+  rpc Attach (stream ControlEvent) returns (stream DisplayEvent);
   // TODO: What is a good design that allows stuff like increasing brightness
   // and noticing when the other side drops out?
   // maybe clients get a handle?
 }
 
+// TODO: Negotiate codec compatibility in hello so we can have users choose
 message HelloRequest {
   string version = 1;
 }
@@ -17,11 +18,19 @@ message HelloReply {
   string version = 1;
 }
 
-message AttachRequest {}
-
-message AttachReply {
-  bytes edid = 1;
-  uint32 width_pixels = 2;
-  uint32 height_pixels = 3;
-  string video_addr = 4;
+message ControlEvent {
 }
+
+message DisplayEvent {
+  oneof display_event {
+    Attach attach = 1;
+  }
+
+  message Attach {
+    bytes edid = 1;
+    uint32 width_pixels = 2;
+    uint32 height_pixels = 3;
+    uint32 video_port = 4;
+  }
+}
+

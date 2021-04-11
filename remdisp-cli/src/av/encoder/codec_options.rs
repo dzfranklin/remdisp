@@ -1,22 +1,17 @@
-use std::ffi::{c_void, CStr};
-use std::{ptr, fmt};
-use ffmpeg_sys_next as av;
-use std::os::raw::c_char;
-use std::fmt::{Debug, Formatter};
 use crate::av::ensure_av_logs_setup;
+use ffmpeg_sys_next as av;
+use std::ffi::{c_void, CStr};
+use std::fmt::{Debug, Formatter};
+use std::os::raw::c_char;
+use std::{fmt, ptr};
 
 pub struct Options {
-    children: Vec<Option>
+    children: Vec<Option>,
 }
 
 pub enum Option {
-    Entry {
-        name: String,
-    },
-    Dict {
-        name: String,
-        value: Box<Options>,
-    },
+    Entry { name: String },
+    Dict { name: String, value: Box<Options> },
 }
 
 impl Options {
@@ -60,34 +55,28 @@ impl Options {
     fn new_dict(name: String, dict: Options) -> Option {
         Option::Dict {
             name: name,
-            value: Box::new(dict)
+            value: Box::new(dict),
         }
     }
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self {
-            children: vec![],
-        }
+        Self { children: vec![] }
     }
 }
 
 impl Debug for Options {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_list()
-            .entries(&self.children)
-            .finish()
+        f.debug_list().entries(&self.children).finish()
     }
 }
 
 impl Debug for Option {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Option::Entry { name } =>
-                write!(f, "{}", name),
-            Option::Dict { name, value } =>
-                write!(f, "{}={:?}", name, value)
+            Option::Entry { name } => write!(f, "{}", name),
+            Option::Dict { name, value } => write!(f, "{}={:?}", name, value),
         }
     }
 }

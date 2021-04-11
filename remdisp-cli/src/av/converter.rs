@@ -1,12 +1,12 @@
-use std::{ptr};
 use std::ops::BitAnd;
+use std::ptr;
 
 use evdi::prelude::{DrmFormat, Mode, UnrecognizedFourcc};
 use ffmpeg_sys_next as av;
 use thiserror::Error;
 
+use crate::av::{ensure_av_logs_setup, AvError};
 use crate::prelude::*;
-use crate::av::{AvError, ensure_av_logs_setup};
 
 const ALIGNMENT: i32 = 32;
 
@@ -37,7 +37,8 @@ impl Converter {
         let width = src.width as i32;
         let height = src.height as i32;
         let src_stride = src.stride() as i32;
-        let format = src.pixel_format
+        let format = src
+            .pixel_format
             .map_err(|err| ConverterError::UnrecognizedDrmFormat(err))?;
         let src = Self::pixel_format_for(format)?;
 
@@ -46,7 +47,11 @@ impl Converter {
                 return Err(ConverterError::UnsupportedSrcFormat(src).into());
             }
 
-            if (*av::av_pix_fmt_desc_get(src)).flags.bitand(av::AV_PIX_FMT_FLAG_PLANAR as u64) != 0 {
+            if (*av::av_pix_fmt_desc_get(src))
+                .flags
+                .bitand(av::AV_PIX_FMT_FLAG_PLANAR as u64)
+                != 0
+            {
                 return Err(ConverterError::PlanarSrc(src).into());
             }
 
@@ -112,13 +117,27 @@ impl Converter {
             frame.format = src as i32;
         }
 
-        Ok(Self { ctx, src_frame, dst_frame, dst_buf, src_format: src, dst_format: dst, width, height, src_stride })
+        Ok(Self {
+            ctx,
+            src_frame,
+            dst_frame,
+            dst_buf,
+            src_format: src,
+            dst_format: dst,
+            width,
+            height,
+            src_stride,
+        })
     }
 
     /// Caller should not change width, height, format, data, or linesize of frame.
     #[instrument(skip(src))]
     pub fn convert(&mut self, src: &[u8]) -> &mut av::AVFrame {
-        assert_eq!(src.len(), (self.src_stride * self.height) as usize, "Invalid src length");
+        assert_eq!(
+            src.len(),
+            (self.src_stride * self.height) as usize,
+            "Invalid src length"
+        );
 
         unsafe {
             let src_frame = self.src_frame.as_mut();
@@ -136,7 +155,10 @@ impl Converter {
                 dst_frame.data.as_ptr(),
                 dst_frame.linesize.as_ptr(),
             );
-            assert_eq!(output_height, self.height, "sws_scale returned unexpected output height");
+            assert_eq!(
+                output_height, self.height,
+                "sws_scale returned unexpected output height"
+            );
         }
 
         unsafe { self.dst_frame.as_mut() }
@@ -147,9 +169,7 @@ impl Converter {
         // TODO: Support more
         match format {
             DrmFormat::Xrgb8888 => Ok(av::AV_PIX_FMT_0RGB32),
-            _ => {
-                Err(ConverterError::UnsupportedDrmFormat(format))
-            }
+            _ => Err(ConverterError::UnsupportedDrmFormat(format)),
         }
     }
 }
@@ -187,14 +207,10 @@ pub mod tests {
     use std::io::Write;
     use std::slice;
 
-    use evdi::DrmFormat;
     use evdi::prelude::Mode;
-    use ffmpeg_sys_next as ffi;
-
-    use crate::prelude::*;
 
     use super::*;
-    use crate::av::encoder::tests::{mode_fixture, framebuf_fixture};
+    use crate::av::encoder::tests::{framebuf_fixture, mode_fixture};
 
     #[ltest]
     fn can_create() {

@@ -1,11 +1,11 @@
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use clap::{App, Arg, ArgMatches, SubCommand};
 
 use remdisp_cli::*;
-use tracing::{debug, info, warn, error, span, instrument};
 use tokio_stream::StreamExt;
+use tracing::{debug, error, info, instrument, span, warn};
 
 const DEFAULT_PORT: &str = "48611";
 
@@ -34,8 +34,11 @@ async fn main() -> Result<()> {
                 .takes_value(true)))
         .get_matches();
 
-    let port: u16 = args.value_of("port").unwrap()
-        .parse().context("Failed to parse port")?;
+    let port: u16 = args
+        .value_of("port")
+        .unwrap()
+        .parse()
+        .context("Failed to parse port")?;
 
     if args.is_present("features") {
         info!("Built with features: {}", built_info::FEATURES.join(", "));
@@ -56,7 +59,7 @@ async fn subcommand_display(_port: u16, _sub_args: &ArgMatches<'_>) -> Result<()
 
 #[cfg(feature = "display")]
 async fn subcommand_display(port: u16, _sub_args: &ArgMatches<'_>) -> Result<()> {
-    use control_plane::display::DisplayServer;
+    use display::DisplayServer;
 
     let addr: SocketAddr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port).into();
     DisplayServer::default().serve(addr).await?;
@@ -71,21 +74,11 @@ async fn subcommand_control(_port: u16, _sub_args: &ArgMatches<'_>) -> Result<()
 
 #[cfg(feature = "control")]
 async fn subcommand_control(port: u16, sub_args: &ArgMatches<'_>) -> Result<()> {
-    use control_plane::control::ControlClient;
+    use control::ControlClient;
 
     let host = sub_args.value_of("host").unwrap();
 
-    let mut control = ControlClient::connect(host, port).await?;
-
-    let mut events = control.attach().await?;
-
-    while let Some(event) = events.next().await {
-        // NOTE: If we later try to recover from some errors remember that this also includes
-        // protocol-level errors. For example, if the other side unexpectedly vanishes we will get
-        // a continual stream of Err(Status { code: Unknown, message: "h2 protocol error: broken pipe" })
-        let event = event?;
-        println!("Got event: {:?}", event);
-    }
+    let _control = ControlClient::connect(host, port).await?;
 
     Ok(())
 }

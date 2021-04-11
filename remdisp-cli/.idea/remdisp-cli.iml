@@ -125,6 +125,20 @@
       <sourceFolder url="file://$MODULE_DIR$/target/debug/build/syn-0f1bf44d9dbb5570/out" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/target/debug/build/tokio-ebfc865ebfcc2859/out" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/target/debug/build/vergen-4c94cca437433eec/out" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/target/debug/build/ddc-hi-b4cc55bb8efe780a/out" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/target/debug/build/evdi-sys-1fd48635f430e51a/out" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/target/debug/build/failure_derive-f739d653f0090e72/out" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/target/debug/build/ffmpeg-sys-next-df1ba74ba6c4d9da/out" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/target/debug/build/libc-54350953ba6dcba4/out" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/target/debug/build/libloading-459dea88557958cf/out" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/target/debug/build/libudev-sys-7c708e07750f4563/out" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/target/debug/build/miniz_oxide-4d93e54a312e9bb1/out" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/target/debug/build/prost-build-8aa5f4d9ea343d42/out" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/target/debug/build/rav1e-d8aa044d1e66d75b/out" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/target/debug/build/remdisp-cli-f965cd422559f1b4/out" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/target/debug/build/uninitialized-170256b5a8b35f14/out" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/target/debug/build/vergen-298988a1e6b90d09/out" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/target/debug/build/winapi-0e08e7521877fd70/out" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

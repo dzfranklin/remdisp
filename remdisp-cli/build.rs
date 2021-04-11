@@ -1,5 +1,5 @@
+use anyhow::{Context, Result};
 use built::write_built_file;
-use anyhow::{Result, Context};
 use std::env;
 
 fn main() -> Result<()> {

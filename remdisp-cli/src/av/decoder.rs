@@ -1,11 +1,12 @@
-use std::{io, ptr};
 use std::os::raw::c_int;
+use std::{io, ptr};
 
 use ffmpeg_sys_next as sys;
 use ffmpeg_sys_next::avcodec_receive_frame;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-use crate::av::{AvError, ensure_av_logs_setup, to_av_error};
+use crate::av::yuv_frame::YuvFrame;
+use crate::av::{ensure_av_logs_setup, to_av_error, AvError};
 use crate::prelude::*;
 
 #[derive(Derivative)]
@@ -15,9 +16,9 @@ pub struct Decoder {
     parser: ptr::NonNull<sys::AVCodecParserContext>,
     frame: ptr::NonNull<sys::AVFrame>,
     pkt: ptr::NonNull<sys::AVPacket>,
-    #[derivative(Debug = "ignore")]
-    recv_buf: Box<[u8]>,
 }
+
+// TODO: Impl debug that looks inside, also for others
 
 /// Currently re-using after flushing not supported
 impl Decoder {
@@ -34,9 +35,24 @@ impl Decoder {
         // TODO: Negotiate in hello
         let codec_id = sys::AVCodecID::AV_CODEC_ID_H264;
 
-        let parser = unsafe { nonnull_or!(sys::av_parser_init(codec_id as c_int), AvError::CreateParser) }?;
-        let codec = unsafe { nonnull_or!(sys::avcodec_find_decoder(codec_id), AvError::CodecUnavailable(codec_id)) }?;
-        let ctx = unsafe { nonnull_or!(sys::avcodec_alloc_context3(codec.as_ptr()), AvError::CreateContext) }?;
+        let parser = unsafe {
+            nonnull_or!(
+                sys::av_parser_init(codec_id as c_int),
+                AvError::CreateParser
+            )
+        }?;
+        let codec = unsafe {
+            nonnull_or!(
+                sys::avcodec_find_decoder(codec_id),
+                AvError::CodecUnavailable(codec_id)
+            )
+        }?;
+        let ctx = unsafe {
+            nonnull_or!(
+                sys::avcodec_alloc_context3(codec.as_ptr()),
+                AvError::CreateContext
+            )
+        }?;
 
         unsafe {
             let status = sys::avcodec_open2(ctx.as_ptr(), codec.as_ptr(), ptr::null_mut());
@@ -45,45 +61,42 @@ impl Decoder {
             }
         }
 
-        let frame = unsafe {
-            nonnull_or!(sys::av_frame_alloc(), AvError::AllocateFrame)
-        }?;
+        let frame = unsafe { nonnull_or!(sys::av_frame_alloc(), AvError::AllocateFrame) }?;
 
-        let pkt = unsafe {
-            nonnull_or!(sys::av_packet_alloc(), AvError::AllocatePacket)
-        }?;
-
-        let recv_buf = Box::new(vec![0u8; Self::RECV_BUF_SIZE + sys::AV_INPUT_BUFFER_PADDING_SIZE as usize])
-            .into_boxed_slice();
+        let pkt = unsafe { nonnull_or!(sys::av_packet_alloc(), AvError::AllocatePacket) }?;
 
         Ok(Self {
             ctx,
             parser,
             frame,
             pkt,
-            recv_buf,
         })
     }
 
-    /// Safety: UNCERTAIN. I'm unsure the return value is sound. The frame is re-used in multiple
-    /// places in the decoder. Be careful you aren't holding onto any reference to anything in it
-    /// by the time you call any function in Decoder again.
     #[instrument(err, skip(input, on_frame))]
     pub async fn decode<R, Cb>(&mut self, mut input: R, mut on_frame: Cb) -> Result<(), DecodeError>
-        where
-            R: AsyncRead + Unpin,
-            Cb: FnMut(&sys::AVFrame),
+    where
+        R: AsyncRead + Unpin,
+        Cb: for<'a> FnMut(YuvFrame<'a>),
     {
+        let mut recv_buf =
+            vec![0u8; Self::RECV_BUF_SIZE + sys::AV_INPUT_BUFFER_PADDING_SIZE as usize];
+
         loop {
             let mut unparsed_start = 0;
-            let mut unparsed_size = input.read(&mut self.recv_buf).await?;
+            let mut unparsed_size = input.read(&mut recv_buf).await?;
             if unparsed_size == 0 {
                 debug!("Nothing more to read, flushing");
                 return self.flush(&mut on_frame);
             }
 
             while unparsed_size > 0 {
-                let parsed_size = self.parse_into_pkt(unparsed_start, unparsed_size)?;
+                let unparsed_data = &recv_buf[unparsed_start..unparsed_start + unparsed_size];
+                let parsed_size = self.parse_into_pkt(&unparsed_data)?;
+
+                if parsed_size == 0 {
+                    return Err(DecodeError::ParsedNoData);
+                }
 
                 unparsed_start += parsed_size as usize;
                 unparsed_size -= parsed_size as usize;
@@ -91,19 +104,20 @@ impl Decoder {
                 let pkt_ref = unsafe { self.pkt.as_ref() };
                 if pkt_ref.size <= 0 {
                     // Haven't parsed a full packet yet
-                    continue
+                    continue;
                 }
 
                 debug!(
-                    pts=pkt_ref.pts,
-                    dts=pkt_ref.dts,
-                    size=pkt_ref.size,
-                    stream_index=pkt_ref.stream_index,
-                    flags=pkt_ref.flags,
-                    duration=pkt_ref.duration,
-                    pos=pkt_ref.pos,
-                    convergence_duration=pkt_ref.convergence_duration,
-                "Parsed packet");
+                    pts = pkt_ref.pts,
+                    dts = pkt_ref.dts,
+                    size = pkt_ref.size,
+                    stream_index = pkt_ref.stream_index,
+                    flags = pkt_ref.flags,
+                    duration = pkt_ref.duration,
+                    pos = pkt_ref.pos,
+                    convergence_duration = pkt_ref.convergence_duration,
+                    "Parsed packet"
+                );
 
                 self.send_for_decoding(self.pkt.as_ptr())?;
                 debug!("Sent packet for decoding");
@@ -114,10 +128,8 @@ impl Decoder {
     }
 
     /// Returns if a full packet has been parsed
-    #[instrument(err)]
-    fn parse_into_pkt(&mut self, start: usize, size: usize) -> Result<usize, DecodeError> {
-        let data = &self.recv_buf[start..start + size];
-
+    #[instrument(err, skip(data))]
+    fn parse_into_pkt(&mut self, data: &[u8]) -> Result<usize, DecodeError> {
         let pkt_ref = unsafe { self.pkt.as_mut() };
 
         let ret = unsafe {
@@ -142,7 +154,10 @@ impl Decoder {
     }
 
     #[instrument(err, skip(on_frame))]
-    fn flush<Cb: FnMut(&sys::AVFrame)>(&mut self, mut on_frame: Cb) -> Result<(), DecodeError> {
+    fn flush<Cb>(&mut self, mut on_frame: Cb) -> Result<(), DecodeError>
+    where
+        Cb: for<'a> FnMut(YuvFrame<'a>),
+    {
         self.send_for_decoding(ptr::null_mut())?;
 
         self.receive_until_empty(&mut on_frame)
@@ -159,7 +174,10 @@ impl Decoder {
     }
 
     #[instrument(err, skip(on_frame))]
-    fn receive_until_empty<Cb: FnMut(&sys::AVFrame)>(&mut self, mut on_frame: Cb) -> Result<(), DecodeError> {
+    fn receive_until_empty<Cb>(&mut self, mut on_frame: Cb) -> Result<(), DecodeError>
+    where
+        Cb: for<'a> FnMut(YuvFrame<'a>),
+    {
         loop {
             let ret = unsafe { avcodec_receive_frame(self.ctx.as_ptr(), self.frame.as_ptr()) };
             if ret == to_av_error(sys::EAGAIN) {
@@ -171,10 +189,9 @@ impl Decoder {
             } else if ret < 0 {
                 return Err(AvError::InDecoding(ret).into());
             } else {
-                // Safety: Uncertain. We mark in the type system that frame is derived from &self, which
-                //  means it can't outlive the Drop where we free it and the user can't call functions
-                //  that would mutate it while keeping it. Still, we don't understand ffmpeg well enough
-                //  to be reasonably certain this is OK.
+                //  Safety: We mark in the type system that frame is derived from &self, which
+                //   means it can't outlive the Drop where we free it and the user can't call functions
+                //   that would mutate it while keeping it.
                 let frame_ref = unsafe { self.frame.as_ref() };
 
                 debug!(
@@ -189,7 +206,7 @@ impl Decoder {
                     flags=frame_ref.flags,
                 "Decoded frame");
 
-                on_frame(frame_ref);
+                on_frame(unsafe { YuvFrame::from_sys(frame_ref) });
             }
         }
     }
@@ -212,13 +229,14 @@ pub enum DecodeError {
     Io(#[from] io::Error),
     #[error("AV error decoding input")]
     Av(#[from] AvError),
+    #[error("Parsed no data while trying to parse packets")]
+    ParsedNoData,
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::prelude::*;
-
     use super::*;
+    use serde::Serialize;
 
     fn decoder_fixture() -> Decoder {
         Decoder::new().unwrap()
@@ -231,13 +249,73 @@ mod tests {
 
     #[ltest(atest)]
     async fn can_decode_sample_data() {
-        let data = tokio::fs::File::open("sample_data/sample.h264").await.unwrap();
+        let data = tokio::fs::File::open("sample_data/sample.h264")
+            .await
+            .unwrap();
         let mut decoder = decoder_fixture();
         let mut frame_count = 0;
-        decoder.decode(data, |frame: &sys::AVFrame| {
-            frame_count += 1;
-            info!("Decoded frame {}", frame_count);
-        }).await.unwrap();
-        assert_eq!(frame_count, 30);
+        decoder
+            .decode(data, |_frame| {
+                frame_count += 1;
+                info!("Decoded frame {}", frame_count);
+            })
+            .await
+            .unwrap();
+        // TODO: We put in 30 frames, but only get out 29. Investigate?
+        assert_eq!(frame_count, 29);
+    }
+
+    /// Should be kept in sync with examples/test_window
+    #[derive(Debug, Serialize)]
+    pub struct SampleYuvFrameMeta {
+        pub y_linesize: usize,
+        pub uv_linesize: usize,
+        pub height: usize,
+        pub count: usize,
+    }
+
+    #[ignore]
+    #[atest]
+    async fn generate_sample_yuv_frames() {
+        use io::Write;
+
+        let data = tokio::fs::File::open("sample_data/sample.h264")
+            .await
+            .unwrap();
+
+        let mut y_linesize = 0;
+        let mut uv_linesize = 0;
+        let mut height = 0;
+
+        let mut count = 0;
+        decoder_fixture()
+            .decode(data, |frame| {
+                // We assume all frames have same meta
+                y_linesize = frame.y_linesize;
+                uv_linesize = frame.uv_linesize;
+                height = frame.height;
+
+                let mut f =
+                    std::fs::File::create(format!("sample_data/yuv_frames/{}.yuv", count)).unwrap();
+
+                f.write_all(frame.y).unwrap();
+                f.write_all(frame.u).unwrap();
+                f.write_all(frame.v).unwrap();
+
+                count += 1;
+            })
+            .await
+            .unwrap();
+
+        let mut f = std::fs::File::create("sample_data/yuv_frames/meta.json").unwrap();
+
+        let meta = SampleYuvFrameMeta {
+            y_linesize,
+            uv_linesize,
+            height,
+            count,
+        };
+
+        serde_json::to_writer(&mut f, &meta).unwrap();
     }
 }

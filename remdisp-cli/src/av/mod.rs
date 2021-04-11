@@ -1,4 +1,4 @@
-use std::ffi::{c_void, CStr};
+use std::ffi::c_void;
 use std::io;
 use std::os::raw::{c_char, c_int};
 use std::sync::Once;
@@ -12,12 +12,13 @@ use crate::prelude::*;
 macro_rules! nonnull_or {
     ($maybe_nullptr:expr, $err:expr) => {{
         ptr::NonNull::new($maybe_nullptr).ok_or($err)
-    }}
+    }};
 }
 
-pub mod encoder;
-pub mod decoder;
 mod converter;
+pub mod decoder;
+pub mod encoder;
+pub mod yuv_frame;
 
 static LOG_SETUP: Once = Once::new();
 pub(crate) fn ensure_av_logs_setup() {
@@ -31,7 +32,12 @@ pub(crate) fn ensure_av_logs_setup() {
     });
 }
 
-extern "C" fn logs_cb(_: *mut c_void, level: c_int, fmt: *const c_char, args: *mut sys::__va_list_tag) {
+extern "C" fn logs_cb(
+    _: *mut c_void,
+    level: c_int,
+    fmt: *const c_char,
+    args: *mut sys::__va_list_tag,
+) {
     // Safety: args is valid va_list tag
     let str = unsafe { printf::printf(fmt, args.cast()) };
     dispatch_log(level, str);
@@ -40,15 +46,20 @@ extern "C" fn logs_cb(_: *mut c_void, level: c_int, fmt: *const c_char, args: *m
 fn dispatch_log(level: c_int, msg: String) {
     match level {
         sys::AV_LOG_QUIET => (),
-        sys::AV_LOG_TRACE => trace!(libav=true, av_level=level, "{}", msg),
-        sys::AV_LOG_DEBUG => trace!(libav=true, av_level=level, "{}", msg),
-        sys::AV_LOG_VERBOSE => debug!(libav=true, av_level=level, "{}", msg),
-        sys::AV_LOG_INFO => info!(libav=true, av_level=level, "{}", msg),
-        sys::AV_LOG_WARNING => warn!(libav=true, av_level=level, "{}", msg),
-        sys::AV_LOG_ERROR | sys::AV_LOG_FATAL | sys::AV_LOG_PANIC => error!(av_level=level, "{}", msg),
+        sys::AV_LOG_TRACE => trace!(libav = true, av_level = level, "{}", msg),
+        sys::AV_LOG_DEBUG => trace!(libav = true, av_level = level, "{}", msg),
+        sys::AV_LOG_VERBOSE => debug!(libav = true, av_level = level, "{}", msg),
+        sys::AV_LOG_INFO => info!(libav = true, av_level = level, "{}", msg),
+        sys::AV_LOG_WARNING => warn!(libav = true, av_level = level, "{}", msg),
+        sys::AV_LOG_ERROR | sys::AV_LOG_FATAL | sys::AV_LOG_PANIC => {
+            error!(av_level = level, "{}", msg)
+        }
         _ => {
-            warn!(?level, "Unexpected ffmpeg log level, assuming translates to WARN");
-            warn!(libav=true, av_level=level, "{}", msg);
+            warn!(
+                ?level,
+                "Unexpected ffmpeg log level, assuming translates to WARN"
+            );
+            warn!(libav = true, av_level = level, "{}", msg);
         }
     }
 }
